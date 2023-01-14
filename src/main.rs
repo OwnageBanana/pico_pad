@@ -1,30 +1,23 @@
-#![no_main]
 #![no_std]
+#![no_main]
 
-mod Keyboard;
 pub mod key_code;
 pub mod keyboard;
 pub mod keys;
 pub mod mybuf;
 
+use cortex_m::prelude::_embedded_hal_blocking_i2c_WriteRead;
 use key_code::*;
 use keyboard::*;
 // For string formatting.
-use core::cell::Cell;
 use core::fmt::Write;
 use core::iter::repeat;
 // The macro for our start-up function
 use cortex_m_rt::entry;
 
-// Time handling traits:
-use embedded_time::duration::*;
-// use embedded_time::rate::Extensions;
-
-// CountDown timer for the counter on the display:
-
 // A shorter alias for the Peripheral Access Crate, which provides low-level
 // register access
-use embedded_hal::digital::v2::{InputPin, OutputPin};
+use embedded_hal::digital::v2::InputPin;
 
 // Ensure we halt the program on panic (if we don't mention this crate it won't
 // be linked)
@@ -32,7 +25,7 @@ use panic_halt as _;
 
 // A shorter alias for the Hardware Abstraction Layer, which provides
 // higher-level drivers.
-use hal::{pac, Clock, Sio};
+use hal::{i2c::Error, pac, Clock, Sio};
 use rp2040_hal as hal;
 
 #[link_section = ".boot2"]
@@ -51,7 +44,6 @@ use embedded_graphics::{
     pixelcolor::BinaryColor,
     prelude::*,
     primitives::*,
-    // text::{Baseline, Text},
 };
 use tinybmp::Bmp;
 
@@ -65,14 +57,12 @@ use smart_leds::{brightness, SmartLedsWrite, RGB8};
 use ws2812_pio::Ws2812;
 
 // pio drivers used for ws2812
-use hal::gpio::FunctionPio0;
 use hal::pio::PIOExt;
-// use hal::Sio;
 
 // usb drivers
 use usb_device::{
     class_prelude::UsbBusAllocator,
-    device::{UsbDevice, UsbDeviceBuilder, UsbVidPid},
+    device::{UsbDeviceBuilder, UsbVidPid},
 };
 // multiple usb classes
 use usbd_hid::{
@@ -157,7 +147,11 @@ fn main() -> ! {
         p(pins.gpio26),p(pins.gpio13),p(pins.gpio7),p(pins.gpio1),
         p(pins.gpio15),p(pins.gpio12),p(pins.gpio6),p(pins.gpio0),
     ];
-    let mut k_board = keyboard::Keyboard::new(keyboard_pins, layers);
+    let mut k_board = keyboard::Keyboard::new(
+        hal::Timer::new(unsafe { pac::Peripherals::steal() }.TIMER, &mut pac.RESETS),
+        keyboard_pins,
+        layers,
+    );
 
     // Set up the USB driver
     let usb_bus = UsbBusAllocator::new(hal::usb::UsbBus::new(
@@ -202,12 +196,12 @@ fn main() -> ! {
     let r_cc = pins.gpio21.into_pull_up_input();
 
     // counts of presses
-    let mut btn = 0;
-    let mut cc = 0;
-    let mut cw = 0;
+    let mut _btn = 0;
+    let mut _cc = 0;
+    let mut _cw = 0;
 
     // booleans for detecting presses
-    let mut test_trigger: bool = false;
+    let mut _test_trigger: bool = false;
     let mut btn_trigger: bool = false;
     let mut cc_trigger: bool = false;
     let mut cw_trigger: bool = false;
@@ -243,7 +237,7 @@ fn main() -> ! {
         // rotary updating
         if !btn_trigger && r_btn.is_low().unwrap() {
             btn_trigger = true;
-            btn += 1;
+            // btn += 1;
             btn_toggle = !btn_toggle;
         } else if !r_btn.is_low().unwrap() {
             btn_trigger = false;
@@ -529,39 +523,38 @@ fn core1_task(sys_freq: u32) -> ! {
     let mut usec = timer.get_counter();
     let hold_time = 100000; //100 ms
     let mut dusec = timer.get_counter();
-    let debounce = 50000; //10 ms
+    let debounce = 50000; //50 ms
     let mut hold = false;
     loop {
         let mut update_bongo = false;
         let input = sio.fifo.read();
 
         match input {
-            Some(word) => {
-                if word == UPDATE_BONGO {
-                    // set the debounce to ignore any errant inputs. if we are already debouncing then eat input
-                    if debounce + dusec < timer.get_counter() {
-                        dusec = timer.get_counter();
-                    } else {
-                        continue;
-                    }
-                    if bongo_state == bongo::Up {
-                        if bongo_prev == bongo::Right {
-                            bongo_state = bongo::Left;
-                            bongo_prev = bongo::Left;
-                        } else {
-                            bongo_state = bongo::Right;
-                            bongo_prev = bongo::Right;
-                        }
-                    } else if bongo_state == bongo::Right {
-                        bongo_state = bongo::Left;
-                    } else if bongo_state == bongo::Left {
-                        bongo_state = bongo::Right;
-                    }
-                    update_bongo = true;
-                    hold = true;
-                    usec = timer.get_counter();
+            Some(UPDATE_BONGO) => {
+                // set the debounce to ignore any errant inputs. if we are already debouncing then eat input
+                if debounce + dusec < timer.get_counter() {
+                    dusec = timer.get_counter();
+                } else {
+                    continue;
                 }
+                if bongo_state == bongo::Up {
+                    if bongo_prev == bongo::Right {
+                        bongo_state = bongo::Left;
+                        bongo_prev = bongo::Left;
+                    } else {
+                        bongo_state = bongo::Right;
+                        bongo_prev = bongo::Right;
+                    }
+                } else if bongo_state == bongo::Right {
+                    bongo_state = bongo::Left;
+                } else if bongo_state == bongo::Left {
+                    bongo_state = bongo::Right;
+                }
+                update_bongo = true;
+                hold = true;
+                usec = timer.get_counter();
             }
+            Some(word) => {}
             None => {}
         }
         // hold keeps the animation frame in until timer is up
@@ -585,47 +578,6 @@ fn core1_task(sys_freq: u32) -> ! {
                 display.flush().unwrap();
             }
         }
-
-        // // if let Some(word) = input {}
-
-        // // sio.fifo.write_blocking(CORE1_TASK_COMPLETE);
-        // // };
-        // // delay.delay_ms(500);
-        // display.clear();
-        // bongo_left.draw(&mut display).unwrap();
-        // display_rect.draw(&mut display).unwrap();
-        // display.flush().unwrap();
-        // delay.delay_ms(100);
-
-        // display.clear();
-        // bongo_right.draw(&mut display).unwrap();
-        // display_rect.draw(&mut display).unwrap();
-        // display.flush().unwrap();
-        // delay.delay_ms(100);
-
-        // display.clear();
-        // bongo_left.draw(&mut display).unwrap();
-        // display_rect.draw(&mut display).unwrap();
-        // display.flush().unwrap();
-        // delay.delay_ms(100);
-
-        // display.clear();
-        // bongo_up.draw(&mut display).unwrap();
-        // display_rect.draw(&mut display).unwrap();
-        // display.flush().unwrap();
-        // delay.delay_ms(200);
-
-        // display.clear();
-        // bongo_both.draw(&mut display).unwrap();
-        // display_rect.draw(&mut display).unwrap();
-        // display.flush().unwrap();
-        // delay.delay_ms(100);
-
-        // display.clear();
-        // bongo_up.draw(&mut display).unwrap();
-        // display_rect.draw(&mut display).unwrap();
-        // display.flush().unwrap();
-        // delay.delay_ms(200);
     }
 }
 

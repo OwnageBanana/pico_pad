@@ -16,7 +16,7 @@ rp2040-boot2 = "0.2.0"
 
 # hal
 rp2040-hal = { version = "0.6", features = ["rt"] }
-embedded-hal = "0.2.5"
+embedded-hal = "0.2.7"
 # required for clocks and delays
 embedded-time = "0.12.1"
 nb = "1.0.0"
